@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.js
+*.mjs
+*.cjs
+.git/
+coverage/
+.nyc_output/
