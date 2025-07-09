@@ -5,7 +5,7 @@ import { User, Campaign, Character, RPGSystem, UserRole, CampaignStatus } from '
 
 async function connectDB() {
     try {
-        const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/lushamm';
+        const mongoURI = process.env.MONGO_CONNECTION_STRING || 'mongodb://localhost:27017/lushamm';
         await mongoose.connect(mongoURI);
         console.log('✅ Conectado ao MongoDB');
     } catch (error) {

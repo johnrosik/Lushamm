@@ -60,7 +60,7 @@
  *    npm install
  * 
  * 2. Configurar variáveis de ambiente (.env):
- *    MONGODB_URI=mongodb://localhost:27017/lushamm
+ *    MONGO_CONNECTION_STRING=mongodb+srv://usuario:senha@cluster.mongodb.net/?retryWrites=true&w=majority&appName=YourApp
  *    JWT_SECRET=your-super-secret-jwt-key
  *    PORT=3001
  *    FRONTEND_URL=http://localhost:3000

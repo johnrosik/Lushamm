@@ -337,7 +337,7 @@ export class WebSocketController {
                     playerId: user.id
                 });
                 
-                if (!character || data.tokenId !== character._id.toString()) {
+                if (!character || data.tokenId !== (character._id as any).toString()) {
                     socket.emit('error', { message: 'Permissão negada para mover este token' });
                     return;
                 }

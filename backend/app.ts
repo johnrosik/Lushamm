@@ -4,9 +4,10 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import { createServer } from 'http';
 import { WebSocketController } from './src/controllers/websocketController';
-import { AuthController } from './src/controllers/authController';
-import { authenticateToken } from './src/middleware/auth';
-import apiRoutes from './src/routes/api';
+// import { AuthController } from './src/controllers/authController';
+// import { authenticateToken } from './src/middleware/auth';
+// import apiRoutes from './src/routes/api';
+import imageRoutes from './src/routes/images';
 
 const app = express();
 const server = createServer(app);
@@ -24,7 +25,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Conectar ao MongoDB
 const connectDB = async () => {
     try {
-        const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/lushamm';
+        const mongoURI = process.env.MONGO_CONNECTION_STRING || 'mongodb://localhost:27017/lushamm';
         await mongoose.connect(mongoURI);
         console.log('Conectado ao MongoDB');
     } catch (error) {
@@ -36,18 +37,21 @@ const connectDB = async () => {
 // Inicializar WebSocket
 const websocketController = new WebSocketController(server);
 
-// Rotas públicas (sem autenticação)
-app.post('/api/auth/register', AuthController.register);
-app.post('/api/auth/login', AuthController.login);
+// Rotas públicas (sem autenticação) - TEMPORARIAMENTE COMENTADAS
+// app.post('/api/auth/register', AuthController.register);
+// app.post('/api/auth/login', AuthController.login);
 
-// Rotas protegidas (com autenticação)
-app.use('/api/auth/verify', authenticateToken, AuthController.verifyToken);
-app.use('/api/auth/logout', authenticateToken, AuthController.logout);
-app.use('/api/auth/profile', authenticateToken, AuthController.updateProfile);
-app.use('/api/auth/change-password', authenticateToken, AuthController.changePassword);
+// Rotas protegidas (com autenticação) - TEMPORARIAMENTE COMENTADAS
+// app.use('/api/auth/verify', authenticateToken, AuthController.verifyToken);
+// app.use('/api/auth/logout', authenticateToken, AuthController.logout);
+// app.use('/api/auth/profile', authenticateToken, AuthController.updateProfile);
+// app.use('/api/auth/change-password', authenticateToken, AuthController.changePassword);
 
-// Todas as outras rotas da API (protegidas)
-app.use('/api', authenticateToken, apiRoutes);
+// Rotas de imagens (SEM autenticação temporariamente para teste)
+app.use('/api/images', imageRoutes);
+
+// Todas as outras rotas da API - TEMPORARIAMENTE COMENTADAS
+// app.use('/api', authenticateToken, apiRoutes);
 
 // Rota de teste
 app.get("/", (req, res) => {
@@ -88,7 +92,18 @@ process.on('SIGTERM', () => {
     console.log('SIGTERM recebido. Fechando servidor...');
     server.close(() => {
         console.log('Servidor fechado');
-        mongoose.connection.close(false, () => {
+        mongoose.connection.close().then(() => {
+            console.log('Conexão MongoDB fechada');
+            process.exit(0);
+        });
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('SIGINT recebido. Fechando servidor...');
+    server.close(() => {
+        console.log('Servidor fechado');
+        mongoose.connection.close().then(() => {
             console.log('Conexão MongoDB fechada');
             process.exit(0);
         });
