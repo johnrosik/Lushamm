@@ -8,7 +8,13 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "docker:build": "docker build -f deploy/Dockerfile -t lushamm-backend .",
+    "docker:dev": "docker-compose -f deploy/docker-compose.yml up -d",
+    "docker:prod": "NODE_ENV=production docker-compose -f deploy/docker-compose.yml up -d",
+    "docker:stop": "docker-compose -f deploy/docker-compose.yml down",
+    "docker:logs": "docker-compose -f deploy/docker-compose.yml logs -f",
+    "deploy:oracle": "cd deploy && ./deploy.sh"
   },
   "keywords": [],
   "author": "",

@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # MongoDB Local
+  mongodb:
+    image: mongo:7.0
+    container_name: lushamm_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: lushamm
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - lushamm_network
+
+  # Backend Node.js
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: lushamm_backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      MONGO_CONNECTION_STRING: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongodb:27017/lushamm?authSource=lushamm
+      JWT_SECRET: ${JWT_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL}
+    volumes:
+      - ../uploads:/app/uploads
+      - ../temp:/app/temp
+    depends_on:
+      - mongodb
+    networks:
+      - lushamm_network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: lushamm_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ../uploads:/var/www/uploads:ro
+    depends_on:
+      - backend
+    networks:
+      - lushamm_network
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+
+networks:
+  lushamm_network:
+    driver: bridge
