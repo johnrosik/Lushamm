@@ -25,7 +25,7 @@ interface ChatMessage {
     isVisible: boolean;
 }
 
-// Interface para posição de token no mapa
+// Interface para posição de token no mapa 
 interface TokenPosition {
     tokenId: string;
     x: number;

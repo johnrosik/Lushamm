@@ -20,16 +20,16 @@ router.post('/campaigns/:campaignId/sessions', CampaignController.startSession);
 
 // Rotas de personagens
 router.post('/characters', CharacterController.createCharacter);
-router.get('/characters', CharacterController.getUserCharacters);
-router.get('/characters/:characterId', CharacterController.getCharacter);
-router.put('/characters/:characterId', CharacterController.updateCharacter);
-router.delete('/characters/:characterId', CharacterController.deleteCharacter);
-router.post('/characters/:characterId/inventory', CharacterController.addInventoryItem);
-router.post('/characters/:characterId/abilities', CharacterController.addAbility);
+router.get('/characters', CharacterController.listCharacters);
+router.get('/characters/:id', CharacterController.getCharacter);
+router.put('/characters/:id', CharacterController.updateCharacter);
+router.delete('/characters/:id', CharacterController.deleteCharacter);
+router.post('/characters/:id/duplicate', CharacterController.duplicateCharacter);
+router.patch('/characters/:id/toggle-public', CharacterController.togglePublic);
 
 // Rotas específicas de sistema
-router.get('/characters/:characterId/validate', CharacterController.validateCharacter);
-router.post('/characters/:characterId/migrate-system', CharacterController.migrateCharacterSystem);
+router.get('/characters/:id/validate', CharacterController.validateCharacter);
+router.get('/campaigns/:campaignId/characters', CharacterController.getCampaignCharacters);
 router.get('/systems/supported', CharacterController.getSupportedSystems);
 
 // Rotas específicas por campanha

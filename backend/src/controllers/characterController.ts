@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
-import { Character, Campaign, ICampaign } from '../models/node';
+import { Character, Campaign } from '../models/node';
 import { RPGSystem } from '../models/node';
 import { SystemManager } from '../services/systemManager';
-import { getCharacterTemplate, validateCharacterForSystem, migrateCharacterSystem } from '../services/characterTemplates';
+
+// === INTERFACES E TIPOS ===
 
 interface CreateCharacterRequest {
     name: string;
@@ -13,450 +14,715 @@ interface CreateCharacterRequest {
     level?: number;
 }
 
-export class CharacterController {
-    // Criar novo personagem
-    static async createCharacter(req: Request, res: Response) {
-        try {
-            const { name, campaignId, system, race, class: characterClass, level = 1 }: CreateCharacterRequest = req.body;
-            const playerId = req.user?.id;
+interface UpdateCharacterRequest {
+    name?: string;
+    race?: string;
+    class?: string;
+    level?: number;
+    attributes?: Record<string, unknown>;
+    inventory?: unknown[];
+    abilities?: unknown[];
+    [key: string]: unknown;
+}
 
-            if (!playerId) {
-                return res.status(401).json({ error: 'Usuário não autenticado' });
+interface CharacterPermissions {
+    isOwner: boolean;
+    isGM: boolean;
+    isInCampaign: boolean;
+    hasEditPermission: boolean;
+    canView: boolean;
+    canEdit: boolean;
+    canDelete: boolean;
+}
+
+interface UpdateData {
+    [key: string]: unknown;
+}
+
+// Campos de seleção otimizados
+const CHARACTER_SELECT_FIELDS = 'name race class level system attributes inventory abilities isPublic allowEdit playerId campaignId createdAt updatedAt';
+const USER_SELECT_FIELDS = 'username avatar role';
+
+export class CharacterController {
+    
+    // === MÉTODOS UTILITÁRIOS PRIVADOS ===
+    
+    /**
+     * Verifica se o usuário está autenticado
+     */
+    private static validateAuthentication(req: Request): string {
+        const userId = req.user?.id;
+        if (!userId) {
+            throw new Error('Usuário não autenticado');
+        }
+        return userId;
+    }
+
+    /**
+     * Valida ObjectId do MongoDB
+     */
+    private static validateObjectId(id: string, entityName: string): void {
+        if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            throw new Error(`${entityName} ID inválido`);
+        }
+    }
+
+    /**
+     * Busca personagem com validação de existência
+     */
+    private static async findCharacterById(characterId: string) {
+        this.validateObjectId(characterId, 'Personagem');
+        
+        const character = await Character.findById(characterId)
+            .select(CHARACTER_SELECT_FIELDS);
+            
+        if (!character) {
+            throw new Error('Personagem não encontrado');
+        }
+        
+        return character;
+    }
+
+    /**
+     * Calcula permissões do usuário para um personagem
+     */
+    private static async calculatePermissions(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        character: Record<string, any>, 
+        userId: string
+    ): Promise<CharacterPermissions> {
+        // Verifica se é o dono do personagem
+        const isOwner = character.playerId?.toString() === userId;
+        
+        // Busca informações da campanha
+        const campaign = await Campaign.findById(character.campaignId)
+            .select('gmId players');
+            
+        if (!campaign) {
+            throw new Error('Campanha não encontrada');
+        }
+
+        const isGM = campaign.gmId.toString() === userId;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const isInCampaign = campaign.players.some((p: any) => p.toString() === userId);
+        const allowEdit = character.allowEdit || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const hasEditPermission = allowEdit.some((id: Record<string, any>) => id.toString() === userId);
+        
+        return {
+            isOwner,
+            isGM,
+            isInCampaign,
+            hasEditPermission,
+            canView: isOwner || isGM || isInCampaign || Boolean(character.isPublic) || hasEditPermission,
+            canEdit: isOwner || isGM || hasEditPermission,
+            canDelete: isOwner || isGM
+        };
+    }
+
+    /**
+     * Valida dados de entrada para criação/atualização
+     */
+    private static validateUpdateData(data: UpdateData): void {
+        const allowedFields = [
+            'name', 'race', 'class', 'level', 'attributes', 
+            'inventory', 'abilities', 'background', 'image',
+            'stats', 'skills', 'allowEdit', 'isPublic'
+        ];
+
+        const invalidFields = Object.keys(data).filter(
+            field => !allowedFields.includes(field)
+        );
+
+        if (invalidFields.length > 0) {
+            throw new Error(`Campos inválidos: ${invalidFields.join(', ')}`);
+        }
+    }
+
+    /**
+     * Wrapper para tratamento de erros
+     */
+    private static handleError(error: unknown, res: Response, defaultMessage: string): void {
+        console.error(`${defaultMessage}:`, error);
+        
+        if (error instanceof Error) {
+            const statusCode = this.getErrorStatusCode(error.message);
+            res.status(statusCode).json({ error: error.message });
+        } else {
+            res.status(500).json({ error: defaultMessage });
+        }
+    }
+
+    /**
+     * Mapeia mensagens de erro para códigos HTTP
+     */
+    private static getErrorStatusCode(message: string): number {
+        if (message.includes('não autenticado')) return 401;
+        if (message.includes('não encontrado')) return 404;
+        if (message.includes('Acesso negado') || message.includes('Permissão negada')) return 403;
+        if (message.includes('inválido') || message.includes('não é suportado')) return 400;
+        return 500;
+    }
+
+    /**
+     * Processa atualizações do personagem
+     */
+    private static processCharacterUpdates(
+        updates: UpdateCharacterRequest,
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
+        _character: any
+    ): Partial<UpdateCharacterRequest> {
+        const processed: Partial<UpdateCharacterRequest> = {};
+
+        // Limpar strings
+        if (updates.name) processed.name = updates.name.trim();
+        if (updates.race) processed.race = updates.race.trim();
+        if (updates.class) processed.class = updates.class.trim();
+
+        // Validar level
+        if (updates.level !== undefined) {
+            processed.level = Math.max(1, Math.min(20, updates.level));
+        }
+
+        // Copiar outros campos
+        if (updates.attributes) processed.attributes = updates.attributes;
+        if (updates.inventory) processed.inventory = updates.inventory;
+        if (updates.abilities) processed.abilities = updates.abilities;
+
+        return processed;
+    }
+
+    // === MÉTODOS PRINCIPAIS ===
+
+    /**
+     * Lista todos os personagens acessíveis ao usuário
+     */
+    public static async listCharacters(req: Request, res: Response): Promise<void> {
+        try {
+            const userId = this.validateAuthentication(req);
+
+            // Busca campanhas do usuário (como GM ou jogador)
+            const campaigns = await Campaign.find({
+                $or: [
+                    { gmId: userId },
+                    { players: userId }
+                ]
+            }).select('_id');
+
+            const campaignIds = campaigns.map(c => c._id);
+
+            // Busca personagens das campanhas + personagens públicos
+            const characters = await Character.find({
+                $or: [
+                    { campaignId: { $in: campaignIds } },
+                    { playerId: userId },
+                    { isPublic: true }
+                ]
+            })
+            .select(CHARACTER_SELECT_FIELDS)
+            .populate('campaignId', 'name system')
+            .populate('playerId', USER_SELECT_FIELDS)
+            .sort({ updatedAt: -1 });
+
+            // Calcula permissões para cada personagem
+            const charactersWithPermissions = await Promise.all(
+                characters.map(async (character) => {
+                    const permissions = await this.calculatePermissions(character, userId);
+                    
+                    return {
+                        ...character.toObject(),
+                        permissions
+                    };
+                })
+            );
+
+            res.json({ 
+                characters: charactersWithPermissions.filter(c => c.permissions.canView),
+                total: charactersWithPermissions.length 
+            });
+        } catch (error) {
+            this.handleError(error, res, 'Erro ao listar personagens');
+        }
+    }
+
+    /**
+     * Busca um personagem específico
+     */
+    public static async getCharacter(req: Request, res: Response): Promise<void> {
+        try {
+            const userId = this.validateAuthentication(req);
+            const { id } = req.params;
+
+            const character = await this.findCharacterById(id);
+            const permissions = await this.calculatePermissions(character, userId);
+
+            if (!permissions.canView) {
+                res.status(403).json({ error: 'Acesso negado ao personagem' });
+                return;
+            }
+
+            res.json({ 
+                character: character.toObject(),
+                permissions: {
+                    canEdit: permissions.canEdit,
+                    canDelete: permissions.canDelete
+                }
+            });
+        } catch (error) {
+            this.handleError(error, res, 'Erro ao buscar personagem');
+        }
+    }
+
+    /**
+     * Cria um novo personagem
+     */
+    public static async createCharacter(req: Request, res: Response): Promise<void> {
+        try {
+            const userId = this.validateAuthentication(req);
+            const { 
+                name, 
+                campaignId, 
+                system = 'dnd5e' as RPGSystem, 
+                race, 
+                class: characterClass, 
+                level = 1 
+            }: CreateCharacterRequest = req.body;
+
+            // Validações de entrada
+            if (!name || !campaignId || !system) {
+                res.status(400).json({ error: 'Nome, ID da campanha e sistema são obrigatórios' });
+                return;
             }
 
             // Verificar se o sistema é suportado
             if (!SystemManager.isSystemSupported(system)) {
-                return res.status(400).json({ 
-                    error: `Sistema ${system} não é totalmente suportado. Sistemas suportados: ${SystemManager.getSupportedSystems().join(', ')}` 
+                res.status(400).json({ 
+                    error: `Sistema ${system} não é suportado. Sistemas disponíveis: ${SystemManager.getSupportedSystems().join(', ')}` 
                 });
+                return;
             }
 
-            // Verificar se a campanha existe e se o usuário tem acesso
+            this.validateObjectId(campaignId, 'Campanha');
+
+            // Verifica acesso à campanha
             const campaign = await Campaign.findById(campaignId);
             if (!campaign) {
-                return res.status(404).json({ error: 'Campanha não encontrada' });
-            }
-
-            const isGM = campaign.gmId.toString() === playerId;
-            const isPlayer = campaign.players.includes(playerId as never);
-
-            if (!isGM && !isPlayer) {
-                return res.status(403).json({ error: 'Acesso negado à campanha' });
-            }
-
-            // Verificar se o sistema da campanha é compatível
-            if (campaign.system !== system) {
-                return res.status(400).json({ 
-                    error: `Personagem deve usar o sistema da campanha: ${campaign.system}` 
-                });
-            }
-
-            // Criar dados básicos do personagem
-            const basicData = {
-                name,
-                playerId,
-                campaignId,
-                race,
-                class: characterClass,
-                level,
-                isPublic: false,
-                allowEdit: []
-            };
-
-            // Usar SystemManager para criar personagem com template correto
-            const characterData = SystemManager.createCharacterForSystem(system, basicData);
-
-            const character = new Character(characterData);
-            await character.save();
-
-            // Adicionar personagem à campanha
-            campaign.characters.push(character._id as never);
-            await campaign.save();
-
-            // Retornar personagem formatado para exibição
-            const formattedCharacter = SystemManager.formatCharacterForDisplay(character.toObject() as unknown as Record<string, unknown>, system);
-
-            res.status(201).json(formattedCharacter);
-        } catch (error) {
-            console.error('Erro ao criar personagem:', error);
-            res.status(500).json({ error: 'Erro ao criar personagem' });
-        }
-    }
-
-    // Buscar personagem específico
-    static async getCharacter(req: Request, res: Response) {
-        try {
-            const { characterId } = req.params;
-            const userId = req.user?.id;
-
-            const character = await Character.findById(characterId)
-                .populate('playerId', 'username avatar')
-                .populate({
-                    path: 'campaignId',
-                    select: 'name gmId players'
-                });
-
-            if (!character) {
-                return res.status(404).json({ error: 'Personagem não encontrado' });
-            }
-
-            // Verificar permissões de acesso (usando unknown para resolver problemas de tipo)
-            const campaignData = character.campaignId as unknown as { gmId: { toString: () => string }; players: string[] };
-            const isOwner = character.playerId.toString() === userId;
-            const isGM = campaignData.gmId.toString() === userId;
-            const isInCampaign = campaignData.players.includes(userId as never);
-            const hasEditPermission = character.allowEdit.includes(userId as never);
-
-            if (!isOwner && !isGM && !isInCampaign && !character.isPublic && !hasEditPermission) {
-                return res.status(403).json({ error: 'Acesso negado' });
-            }
-
-            // Retornar personagem formatado para o sistema específico
-            const formattedCharacter = SystemManager.formatCharacterForDisplay(
-                character.toObject() as unknown as Record<string, unknown>, 
-                character.system
-            );
-
-            res.json(formattedCharacter);
-        } catch (error) {
-            console.error('Erro ao buscar personagem:', error);
-            res.status(500).json({ error: 'Erro ao buscar personagem' });
-        }
-    }
-
-    // Listar personagens do usuário
-    static async getUserCharacters(req: Request, res: Response) {
-        try {
-            const userId = req.user?.id;
-
-            if (!userId) {
-                return res.status(401).json({ error: 'Usuário não autenticado' });
-            }
-
-            const characters = await Character.find({
-                $or: [
-                    { playerId: userId },
-                    { allowEdit: userId },
-                    { isPublic: true }
-                ]
-            }).populate('campaignId', 'name system');
-
-            res.json(characters);
-        } catch (error) {
-            console.error('Erro ao buscar personagens:', error);
-            res.status(500).json({ error: 'Erro ao buscar personagens' });
-        }
-    }
-
-    // Listar personagens de uma campanha
-    static async getCampaignCharacters(req: Request, res: Response) {
-        try {
-            const { campaignId } = req.params;
-            const userId = req.user?.id;
-
-            // Verificar acesso à campanha
-            const campaign = await Campaign.findById(campaignId);
-            if (!campaign) {
-                return res.status(404).json({ error: 'Campanha não encontrada' });
+                res.status(404).json({ error: 'Campanha não encontrada' });
+                return;
             }
 
             const isGM = campaign.gmId.toString() === userId;
-            const isPlayer = campaign.players.includes(userId as never);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const isPlayer = campaign.players.some((p: any) => p.toString() === userId);
 
             if (!isGM && !isPlayer) {
-                return res.status(403).json({ error: 'Acesso negado à campanha' });
+                res.status(403).json({ error: 'Acesso negado à campanha' });
+                return;
             }
 
-            const characters = await Character.find({ campaignId })
-                .populate('playerId', 'username avatar');
-
-            res.json(characters);
-        } catch (error) {
-            console.error('Erro ao buscar personagens da campanha:', error);
-            res.status(500).json({ error: 'Erro ao buscar personagens da campanha' });
-        }
-    }
-
-    // Validar personagem para o sistema
-    static async validateCharacter(req: Request, res: Response) {
-        try {
-            const { characterId } = req.params;
-            const userId = req.user?.id;
-
-            const character = await Character.findById(characterId);
-            if (!character) {
-                return res.status(404).json({ error: 'Personagem não encontrado' });
+            // Verificar compatibilidade do sistema
+            if (campaign.system && campaign.system !== system) {
+                res.status(400).json({ 
+                    error: `Personagem deve usar o sistema da campanha: ${campaign.system}` 
+                });
+                return;
             }
 
-            // Verificar permissões (owner, GM ou edit permission)
-            const campaign = await Campaign.findById(character.campaignId);
-            const isOwner = character.playerId.toString() === userId;
-            const isGM = campaign?.gmId.toString() === userId;
-            const hasEditPermission = character.allowEdit.includes(userId as never);
+            // Preparar dados do personagem
+            const baseData = SystemManager.createCharacterForSystem(system, {
+                name: name.trim(),
+                race: race?.trim(),
+                class: characterClass?.trim(),
+                level: Math.max(1, level)
+            });
 
-            if (!isOwner && !isGM && !hasEditPermission) {
-                return res.status(403).json({ error: 'Acesso negado' });
-            }
+            const characterData = {
+                name: name.trim(),
+                playerId: userId,
+                campaignId,
+                race: race?.trim(),
+                class: characterClass?.trim(),
+                level: Math.max(1, level),
+                isPublic: false,
+                allowEdit: [],
+                ...baseData,
+                system
+            };
 
-            // Validar personagem para o sistema
-            const validation = SystemManager.validateCharacter(
-                character.toObject() as unknown as Record<string, unknown>, 
-                character.system
+            // Cria o personagem
+            const character = new Character(characterData);
+            await character.save();
+
+            // Adicionar à campanha (operação atômica)
+            await Campaign.findByIdAndUpdate(
+                campaignId,
+                { $addToSet: { characters: character._id } },
+                { new: true }
             );
 
-            res.json(validation);
-        } catch (error) {
-            console.error('Erro ao validar personagem:', error);
-            res.status(500).json({ error: 'Erro ao validar personagem' });
-        }
-    }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const savedCharacter = await this.findCharacterById((character as any)._id.toString());
+            const permissions = await this.calculatePermissions(savedCharacter, userId);
 
-    // Migrar personagem para outro sistema
-    static async migrateCharacterSystem(req: Request, res: Response) {
-        try {
-            const { characterId } = req.params;
-            const { newSystem } = req.body;
-            const userId = req.user?.id;
-
-            if (!SystemManager.isSystemSupported(newSystem)) {
-                return res.status(400).json({ 
-                    error: `Sistema ${newSystem} não é suportado` 
-                });
-            }
-
-            const character = await Character.findById(characterId);
-            if (!character) {
-                return res.status(404).json({ error: 'Personagem não encontrado' });
-            }
-
-            // Verificar permissões (owner ou GM)
-            const campaign = await Campaign.findById(character.campaignId);
-            const isOwner = character.playerId.toString() === userId;
-            const isGM = campaign?.gmId.toString() === userId;
-
-            if (!isOwner && !isGM) {
-                return res.status(403).json({ error: 'Apenas o dono ou GM podem migrar o sistema' });
-            }
-
-            // Verificar se a campanha permite este sistema
-            if (campaign && campaign.system !== newSystem) {
-                return res.status(400).json({ 
-                    error: `A campanha usa o sistema ${campaign.system}. Não é possível migrar para ${newSystem}` 
-                });
-            }
-
-            // Migrar personagem
-            const migratedData = migrateCharacterSystem(
-                character.toObject() as unknown as Record<string, unknown>, 
-                newSystem
-            );
-
-            // Atualizar personagem no banco
-            await Character.findByIdAndUpdate(characterId, migratedData);
-            const updatedCharacter = await Character.findById(characterId);
-
-            if (!updatedCharacter) {
-                return res.status(500).json({ error: 'Erro ao recuperar personagem migrado' });
-            }
-
-            // Retornar personagem formatado para o novo sistema
+            // Formatar resposta
             const formattedCharacter = SystemManager.formatCharacterForDisplay(
-                updatedCharacter.toObject() as unknown as Record<string, unknown>, 
-                newSystem
+                savedCharacter.toObject() as unknown as Record<string, unknown>,
+                system
             );
 
-            res.json({
-                message: `Personagem migrado com sucesso para ${newSystem}`,
-                character: formattedCharacter
+            res.status(201).json({ 
+                message: 'Personagem criado com sucesso',
+                character: formattedCharacter,
+                permissions 
             });
         } catch (error) {
-            console.error('Erro ao migrar personagem:', error);
-            res.status(500).json({ error: 'Erro ao migrar personagem' });
+            this.handleError(error, res, 'Erro ao criar personagem');
         }
     }
 
-    // Obter informações sobre sistemas suportados
-    static async getSupportedSystems(req: Request, res: Response) {
+    /**
+     * Atualiza um personagem existente
+     */
+    public static async updateCharacter(req: Request, res: Response): Promise<void> {
         try {
-            const systems = SystemManager.getSupportedSystems().map(system => ({
-                id: system,
-                info: SystemManager.getSystemInfo(system)
-            }));
+            const userId = this.validateAuthentication(req);
+            const { id } = req.params;
+            const updates: UpdateCharacterRequest = req.body;
 
-            res.json({
-                supportedSystems: systems,
-                currentlySupported: SystemManager.getSupportedSystems()
-            });
-        } catch (error) {
-            console.error('Erro ao obter sistemas suportados:', error);
-            res.status(500).json({ error: 'Erro ao obter sistemas suportados' });
-        }
-    }
+            this.validateObjectId(id, 'Personagem');
 
-    // Atualizar personagem com validações de sistema
-    static async updateCharacter(req: Request, res: Response) {
-        try {
-            const { characterId } = req.params;
-            const updates = req.body;
-            const userId = req.user?.id;
-
-            const character = await Character.findById(characterId);
-            if (!character) {
-                return res.status(404).json({ error: 'Personagem não encontrado' });
+            if (!updates || Object.keys(updates).length === 0) {
+                res.status(400).json({ error: 'Nenhum dado para atualizar' });
+                return;
             }
 
-            // Verificar permissões
-            const campaign = await Campaign.findById(character.campaignId);
-            const isOwner = character.playerId.toString() === userId;
-            const isGM = campaign?.gmId.toString() === userId;
-            const hasEditPermission = character.allowEdit.includes(userId as never);
+            const character = await this.findCharacterById(id);
+            const permissions = await this.calculatePermissions(character, userId);
 
-            if (!isOwner && !isGM && !hasEditPermission) {
-                return res.status(403).json({ error: 'Acesso negado' });
+            if (!permissions.canEdit) {
+                res.status(403).json({ error: 'Permissão negada para editar personagem' });
+                return;
             }
 
-            // Calcular valores derivados se necessário
-            let updatedData = { ...character.toObject(), ...updates };
-            updatedData = SystemManager.calculateDerivedValues(
-                updatedData as unknown as Record<string, unknown>, 
-                character.system
-            );
-
+            // Processar atualizações
+            const processedUpdates = this.processCharacterUpdates(updates, character);
+            
             // Validar dados atualizados
-            const validation = SystemManager.validateCharacter(
-                updatedData as Record<string, unknown>, 
-                character.system
-            );
+            const mergedData = { ...character.toObject(), ...processedUpdates };
+            const validation = SystemManager.validateCharacter(mergedData, character.system);
 
             if (!validation.isValid) {
-                return res.status(400).json({
+                res.status(400).json({
                     error: 'Dados inválidos para o sistema',
                     validation
                 });
+                return;
             }
 
             // Atualizar personagem
             const updatedCharacter = await Character.findByIdAndUpdate(
-                characterId,
-                updatedData,
+                id,
+                { 
+                    ...processedUpdates,
+                    updatedAt: new Date()
+                },
                 { new: true, runValidators: true }
-            );
+            ).select(CHARACTER_SELECT_FIELDS);
 
             if (!updatedCharacter) {
-                return res.status(500).json({ error: 'Erro ao atualizar personagem' });
+                res.status(500).json({ error: 'Erro ao atualizar personagem' });
+                return;
             }
 
-            // Retornar personagem formatado
+            const newPermissions = await this.calculatePermissions(updatedCharacter, userId);
+
             const formattedCharacter = SystemManager.formatCharacterForDisplay(
-                updatedCharacter.toObject() as unknown as Record<string, unknown>, 
+                updatedCharacter.toObject() as unknown as Record<string, unknown>,
                 character.system
             );
 
-            res.json(formattedCharacter);
+            res.json({ 
+                message: 'Personagem atualizado com sucesso',
+                character: formattedCharacter,
+                permissions: newPermissions 
+            });
         } catch (error) {
-            console.error('Erro ao atualizar personagem:', error);
-            res.status(500).json({ error: 'Erro ao atualizar personagem' });
+            this.handleError(error, res, 'Erro ao atualizar personagem');
         }
     }
 
-    // Deletar personagem
-    static async deleteCharacter(req: Request, res: Response) {
+    /**
+     * Remove um personagem
+     */
+    public static async deleteCharacter(req: Request, res: Response): Promise<void> {
         try {
-            const { characterId } = req.params;
+            const userId = this.validateAuthentication(req);
+            const { id } = req.params;
+
+            const character = await this.findCharacterById(id);
+            const permissions = await this.calculatePermissions(character, userId);
+
+            if (!permissions.canDelete) {
+                res.status(403).json({ error: 'Permissão negada para excluir personagem' });
+                return;
+            }
+
+            // Deletar personagem e remover da campanha (transação)
+            await Promise.all([
+                Character.findByIdAndDelete(id),
+                Campaign.findByIdAndUpdate(
+                    character.campaignId,
+                    { $pull: { characters: id } }
+                )
+            ]);
+
+            res.json({ 
+                message: 'Personagem excluído com sucesso',
+                deletedId: id 
+            });
+        } catch (error) {
+            this.handleError(error, res, 'Erro ao excluir personagem');
+        }
+    }
+
+    /**
+     * Alterna a visibilidade pública de um personagem
+     */
+    public static async togglePublic(req: Request, res: Response): Promise<void> {
+        try {
+            const { id } = req.params;
             const userId = req.user?.id;
 
-            const character = await Character.findById(characterId).populate('campaignId', 'gmId');
-
-            if (!character) {
-                return res.status(404).json({ error: 'Personagem não encontrado' });
+            if (!userId) {
+                res.status(401).json({ error: 'Usuário não autenticado' });
+                return;
             }
 
-            // Apenas o dono ou GM pode deletar
-            const campaignData = character.campaignId as unknown as { gmId: { toString: () => string } };
-            const isOwner = character.playerId.toString() === userId;
-            const isGM = campaignData.gmId.toString() === userId;
+            const character = await this.findCharacterById(id);
+            const permissions = await this.calculatePermissions(character, userId);
 
-            if (!isOwner && !isGM) {
-                return res.status(403).json({ error: 'Permissão negada para deletar personagem' });
+            if (!permissions.isOwner && !permissions.isGM) {
+                res.status(403).json({ error: 'Apenas o dono ou GM pode alterar visibilidade' });
+                return;
             }
 
-            await Character.findByIdAndDelete(characterId);
+            const updatedCharacter = await Character.findByIdAndUpdate(
+                id,
+                { 
+                    isPublic: !character.isPublic,
+                    updatedAt: new Date()
+                },
+                { new: true }
+            ).select(CHARACTER_SELECT_FIELDS);
 
-            // Remover da campanha
-            await Campaign.findByIdAndUpdate(character.campaignId, {
-                $pull: { characters: characterId }
+            if (!updatedCharacter) {
+                res.status(404).json({ error: 'Personagem não encontrado' });
+                return;
+            }
+
+            res.json({ 
+                character: updatedCharacter.toObject(),
+                message: `Personagem agora é ${updatedCharacter.isPublic ? 'público' : 'privado'}`
+            });
+        } catch (error) {
+            console.error('Erro ao alterar visibilidade:', error);
+            res.status(500).json({ 
+                error: 'Erro interno do servidor',
+                message: error instanceof Error ? error.message : 'Erro desconhecido'
+            });
+        }
+    }
+
+    /**
+     * Duplica um personagem
+     */
+    public static async duplicateCharacter(req: Request, res: Response): Promise<void> {
+        try {
+            const { id } = req.params;
+            const userId = req.user?.id;
+            const { name, campaignId } = req.body;
+
+            if (!userId) {
+                res.status(401).json({ error: 'Usuário não autenticado' });
+                return;
+            }
+
+            if (!name?.trim()) {
+                res.status(400).json({ error: 'Nome para o novo personagem é obrigatório' });
+                return;
+            }
+
+            const originalCharacter = await this.findCharacterById(id);
+            const permissions = await this.calculatePermissions(originalCharacter, userId);
+
+            if (!permissions.canView) {
+                res.status(403).json({ error: 'Acesso negado ao personagem original' });
+                return;
+            }
+
+            // Valida campanha de destino se fornecida
+            let targetCampaignId = originalCharacter.campaignId;
+            if (campaignId) {
+                this.validateObjectId(campaignId, 'Campanha de destino');
+                
+                const targetCampaign = await Campaign.findById(campaignId);
+                if (!targetCampaign) {
+                    res.status(404).json({ error: 'Campanha de destino não encontrada' });
+                    return;
+                }
+
+                const isGM = targetCampaign.gmId.toString() === userId;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const isPlayer = targetCampaign.players.some((p: any) => p.toString() === userId);
+
+                if (!isGM && !isPlayer) {
+                    res.status(403).json({ error: 'Acesso negado à campanha de destino' });
+                    return;
+                }
+
+                targetCampaignId = campaignId;
+            }
+
+            // Busca dados completos do personagem original
+            const fullCharacter = await Character.findById(id);
+            if (!fullCharacter) {
+                res.status(404).json({ error: 'Personagem original não encontrado' });
+                return;
+            }
+
+            // Cria a duplicata
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const characterData: any = fullCharacter.toObject();
+            delete characterData._id;
+            delete characterData.__v;
+
+            const duplicatedCharacter = new Character({
+                ...characterData,
+                name,
+                playerId: userId,
+                campaignId: targetCampaignId,
+                allowEdit: [],
+                isPublic: false
             });
 
-            res.json({ message: 'Personagem deletado com sucesso' });
+            await duplicatedCharacter.save();
+
+            // Adicionar à campanha
+            await Campaign.findByIdAndUpdate(
+                targetCampaignId,
+                { $addToSet: { characters: duplicatedCharacter._id } }
+            );
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const savedCharacter = await this.findCharacterById((duplicatedCharacter as any)._id.toString());
+            const newPermissions = await this.calculatePermissions(savedCharacter, userId);
+
+            res.status(201).json({ 
+                character: savedCharacter.toObject(),
+                permissions: newPermissions,
+                message: 'Personagem duplicado com sucesso'
+            });
         } catch (error) {
-            console.error('Erro ao deletar personagem:', error);
-            res.status(500).json({ error: 'Erro ao deletar personagem' });
+            this.handleError(error, res, 'Erro ao duplicar personagem');
         }
     }
 
-    // Adicionar item ao inventário
-    static async addInventoryItem(req: Request, res: Response) {
+    /**
+     * Listar personagens de uma campanha
+     */
+    public static async getCampaignCharacters(req: Request, res: Response): Promise<void> {
         try {
-            const { characterId } = req.params;
-            const { item } = req.body;
-            const userId = req.user?.id;
+            const userId = this.validateAuthentication(req);
+            const { campaignId } = req.params;
 
-            const character = await Character.findById(characterId).populate('campaignId', 'gmId settings');
+            this.validateObjectId(campaignId, 'Campanha');
 
-            if (!character) {
-                return res.status(404).json({ error: 'Personagem não encontrado' });
+            // Verificar acesso à campanha
+            const campaign = await Campaign.findById(campaignId);
+            if (!campaign) {
+                res.status(404).json({ error: 'Campanha não encontrada' });
+                return;
             }
 
-            // Verificar permissões (addInventoryItem)
-            const campaignData = character.campaignId as unknown as { gmId: { toString: () => string }; settings?: { allowPlayerCharacterEdit: boolean } };
-            const isOwner = character.playerId.toString() === userId;
-            const isGM = campaignData.gmId.toString() === userId;
-            const canEdit = isGM || (isOwner && campaignData.settings?.allowPlayerCharacterEdit);
+            const isGM = campaign.gmId.toString() === userId;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const isPlayer = campaign.players.some((p: any) => p.toString() === userId);
 
-            if (!canEdit) {
-                return res.status(403).json({ error: 'Permissão negada' });
+            if (!isGM && !isPlayer) {
+                res.status(403).json({ error: 'Acesso negado à campanha' });
+                return;
             }
 
-            character.inventory.push(item);
-            await character.save();
+            const characters = await Character.find({ campaignId })
+                .select(CHARACTER_SELECT_FIELDS)
+                .populate('playerId', USER_SELECT_FIELDS)
+                .sort({ name: 1 });
 
-            res.json(character);
+            // Formatar personagens
+            const formattedCharacters = characters.map(character => 
+                SystemManager.formatCharacterForDisplay(
+                    character.toObject() as unknown as Record<string, unknown>,
+                    character.system
+                )
+            );
+
+            res.json({
+                characters: formattedCharacters,
+                total: formattedCharacters.length
+            });
         } catch (error) {
-            console.error('Erro ao adicionar item:', error);
-            res.status(500).json({ error: 'Erro ao adicionar item' });
+            this.handleError(error, res, 'Erro ao buscar personagens da campanha');
         }
     }
 
-    // Adicionar habilidade/magia
-    static async addAbility(req: Request, res: Response) {
+    /**
+     * Validar personagem para o sistema
+     */
+    public static async validateCharacter(req: Request, res: Response): Promise<void> {
         try {
-            const { characterId } = req.params;
-            const { ability } = req.body;
-            const userId = req.user?.id;
+            const userId = this.validateAuthentication(req);
+            const { id } = req.params;
 
-            const character = await Character.findById(characterId).populate('campaignId', 'gmId settings');
+            const character = await this.findCharacterById(id);
+            const permissions = await this.calculatePermissions(character, userId);
 
-            if (!character) {
-                return res.status(404).json({ error: 'Personagem não encontrado' });
+            if (!permissions.canView) {
+                res.status(403).json({ error: 'Acesso negado' });
+                return;
             }
 
-            // Verificar permissões (addAbility)
-            const campaignData2 = character.campaignId as unknown as { gmId: { toString: () => string }; settings?: { allowPlayerCharacterEdit: boolean } };
-            const isOwner2 = character.playerId.toString() === userId;
-            const isGM2 = campaignData2.gmId.toString() === userId;
-            const canEdit2 = isGM2 || (isOwner2 && campaignData2.settings?.allowPlayerCharacterEdit);
+            const validation = SystemManager.validateCharacter(
+                character.toObject() as unknown as Record<string, unknown>, 
+                character.system
+            );
 
-            if (!canEdit2) {
-                return res.status(403).json({ error: 'Permissão negada' });
-            }
-
-            character.abilities.push(ability);
-            await character.save();
-
-            res.json(character);
+            res.json({
+                validation,
+                systemInfo: SystemManager.getSystemInfo(character.system)
+            });
         } catch (error) {
-            console.error('Erro ao adicionar habilidade:', error);
-            res.status(500).json({ error: 'Erro ao adicionar habilidade' });
+            this.handleError(error, res, 'Erro ao validar personagem');
+        }
+    }
+
+    /**
+     * Obter sistemas suportados
+     */
+    public static async getSupportedSystems(req: Request, res: Response): Promise<void> {
+        try {
+            const systems = SystemManager.getSupportedSystems().map(system => ({
+                id: system,
+                name: system,
+                info: SystemManager.getSystemInfo(system),
+                isFullySupported: SystemManager.isSystemSupported(system)
+            }));
+
+            res.json({
+                supportedSystems: systems,
+                totalSystems: systems.length
+            });
+        } catch (error) {
+            this.handleError(error, res, 'Erro ao obter sistemas suportados');
         }
     }
 }
