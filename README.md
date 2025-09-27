@@ -1,8 +1,8 @@
-# 🎲 Lushamm RPG Backend
+# Lushamm RPG Backend
 
 Bem-vindo ao **Lushamm**, uma plataforma completa para mestres e jogadores de RPG administrarem campanhas, fichas de personagem, mapas e rolagens de dados em um único lugar. Este repositório contém o backend escrito em **Node.js** com **TypeScript**, seguindo boas práticas de organização, validação e escalabilidade.
 
-## ✨ Principais recursos
+## Principais recursos
 
 - **Gerenciamento de campanhas** com controle de jogadores, permissões e progressão.
 - **Fichas de personagem dinâmicas** compatíveis com múltiplos sistemas (`D&D 5e`, `FATE`, `Cyberpunk`, `Call of Cthulhu`, `Pathfinder`, `Vampire` e sistemas customizados).
@@ -12,7 +12,7 @@ Bem-vindo ao **Lushamm**, uma plataforma completa para mestres e jogadores de RP
 - **Integração com WebSocket** para chat em tempo real, rolagens de dados e sincronização de mapas.
 - **Infraestrutura preparada para produção** (scripts Docker, deploy Oracle Cloud, validação com ESLint, build TypeScript dedicado).
 
-## 🗂️ Estrutura do projeto
+## Estrutura do projeto
 
 ```
 backend/
@@ -30,7 +30,7 @@ backend/
  └─ tsconfig.json         # Configuração TypeScript compartilhada
 ```
 
-## 🧰 Stack tecnológica
+## Stack tecnológica
 
 | Camada             | Tecnologia                                                                 |
 |--------------------|-----------------------------------------------------------------------------|
@@ -43,7 +43,7 @@ backend/
 | Qualidade de código| ESLint, TypeScript estrito, scripts de build                                |
 | Deploy             | Docker, docker-compose, scripts Oracle Cloud                                |
 
-## 🚀 Como rodar o projeto
+## Como rodar o projeto
 
 1. **Instale dependências**
 
@@ -77,7 +77,7 @@ npm run build
 npm run lint
 ```
 
-## 🔌 Endpoints em destaque
+## Endpoints em destaque
 
 - `POST /api/auth/login` – Autenticação JWT.
 - `GET /api/campaigns` – Listagem e gerenciamento de campanhas.
@@ -86,7 +86,7 @@ npm run lint
 - `POST /api/images/upload/single` – Upload e compressão automática de imagens.
 - `GET /api/systems/supported` – Lista de sistemas de RPG atualmente suportados.
 
-## 🛡️ Boas práticas implementadas
+## Boas práticas implementadas
 
 - **Validação rigorosa** de ObjectId e payloads em todos os controladores.
 - **Tratamento consistente de erros** com mapeamento para status HTTP adequados.
@@ -96,7 +96,7 @@ npm run lint
 - **Scripts utilitários** para facilitar compressão de imagens, geração de mocks e deploy automatizado.
 
 
-## 🧭 Próximos passos
+## Próximos passos
 
 - Criar suíte de testes automatizados (unitários e integração).
 - Implementar cache distribuído para consultas frequentes (Redis).
@@ -104,7 +104,7 @@ npm run lint
 - Disponibilizar documentação pública (Swagger/OpenAPI).
 - Adicionar pipelines CI/CD para lint, build e deploy automatizados.
 
-## 🤝 Contribuição
+## Contribuição
 
 1. Faça um fork do projeto
 2. Crie uma branch (`git checkout -b feat/minha-melhoria`)
@@ -112,7 +112,7 @@ npm run lint
 4. Faça push (`git push origin feat/minha-melhoria`)
 5. Abra um Pull Request
 
-## 📄 Licença
+## Licença
 
 Este projeto está disponível sob os termos da licença **MIT**. Consulte o arquivo `LICENSE` (quando disponível) para mais informações.
 
