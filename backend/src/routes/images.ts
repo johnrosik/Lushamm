@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs/promises';
@@ -35,12 +35,15 @@ const ensureDirectories = async () => {
 
 ensureDirectories();
 
+interface MulterRequest extends Request {
+  file?: Express.Multer.File;
+}
+
 // Upload de imagem única
-router.post('/upload/single', upload.single('image'), async (req: any, res: any) => {
+router.post('/upload/single', upload.single('image'), async (req: MulterRequest, res: Response) => {
   try {
     if (!req.file) {
-      res.status(400).json({ error: 'Nenhuma imagem foi enviada' });
-      return;
+      return res.status(400).json({ error: 'Nenhuma imagem foi enviada' });
     }
 
     const tempPath = req.file.path;
@@ -65,14 +68,13 @@ router.post('/upload/single', upload.single('image'), async (req: any, res: any)
     await fs.unlink(tempPath);
 
     if (!compressionResult.success) {
-      res.status(500).json({
+      return res.status(500).json({
         error: 'Erro ao processar a imagem',
         details: compressionResult.error
       });
-      return;
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Imagem enviada e processada com sucesso',
       file: {
@@ -98,14 +100,14 @@ router.post('/upload/single', upload.single('image'), async (req: any, res: any)
       }
     }
 
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Erro interno do servidor no upload de imagem'
     });
   }
 });
 
 // Buscar imagem
-router.get('/:filename', async (req: any, res: any) => {
+router.get('/:filename', async (req: Request, res: Response) => {
   try {
     const { filename } = req.params;
     const imagePath = path.join('./uploads/images', filename);
@@ -113,15 +115,14 @@ router.get('/:filename', async (req: any, res: any) => {
     try {
       await fs.access(imagePath);
     } catch {
-      res.status(404).json({ error: 'Imagem não encontrada' });
-      return;
+      return res.status(404).json({ error: 'Imagem não encontrada' });
     }
 
-    res.sendFile(path.resolve(imagePath));
+    return res.sendFile(path.resolve(imagePath));
 
   } catch (error) {
     console.error('Erro ao buscar imagem:', error);
-    res.status(500).json({ error: 'Erro interno do servidor' });
+    return res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
 

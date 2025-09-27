@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
-import { Character, Campaign } from '../models/node';
-import { RPGSystem } from '../models/node';
+import { Character, Campaign, RPGSystem } from '../models/node';
 import { SystemManager } from '../services/systemManager';
 
 // === INTERFACES E TIPOS ===
@@ -33,10 +32,6 @@ interface CharacterPermissions {
     canView: boolean;
     canEdit: boolean;
     canDelete: boolean;
-}
-
-interface UpdateData {
-    [key: string]: unknown;
 }
 
 // Campos de seleção otimizados
@@ -118,25 +113,6 @@ export class CharacterController {
             canEdit: isOwner || isGM || hasEditPermission,
             canDelete: isOwner || isGM
         };
-    }
-
-    /**
-     * Valida dados de entrada para criação/atualização
-     */
-    private static validateUpdateData(data: UpdateData): void {
-        const allowedFields = [
-            'name', 'race', 'class', 'level', 'attributes', 
-            'inventory', 'abilities', 'background', 'image',
-            'stats', 'skills', 'allowEdit', 'isPublic'
-        ];
-
-        const invalidFields = Object.keys(data).filter(
-            field => !allowedFields.includes(field)
-        );
-
-        if (invalidFields.length > 0) {
-            throw new Error(`Campos inválidos: ${invalidFields.join(', ')}`);
-        }
     }
 
     /**
